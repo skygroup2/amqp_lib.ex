@@ -1,0 +1,256 @@
+defmodule AMQPEx.Worker do
+  @moduledoc false
+  use GenServer
+  require Logger
+  alias AMQPEx.Router
+  import Skn.Util, only: [
+    reset_timer: 3,
+    cancel_timer: 2
+  ]
+
+  defmacro send_check(name, do: expression) do
+    # will loss message in these case
+    quote do
+      try do
+        ret = unquote(expression)
+        case ret do
+          :ok -> []
+          :closing ->
+            Logger.error("#{unquote(name)} send closing")
+            {:next_event, :internal, :closed}
+          # :blocked -> let this process crashed
+        end
+      catch
+        _, exp ->
+          Logger.error("#{unquote(name)} send exception #{inspect exp}")
+          {:next_event, :internal, :closed}
+      end
+    end
+  end
+
+  def start_link(args) do
+    :gen_statem.start_link({:local, args.name}, __MODULE__, args, [])
+  end
+
+  def init(args) do
+    reset_timer(:reconnect, :reconnect, 5_000)
+    {:ok, :idle, %{
+      name: args.name, recv_queue: [], send_queue: [],
+      conn_name: args.conn_name, conn: nil, conn_pid: nil, conn_ref: nil, conn_get: false,
+    }}
+  end
+
+  def idle(:info, :reconnect, %{name: name, conn_name: conn_name, conn_get: conn_get} = data) do
+    if conn_get == false do
+      AMQPEx.Connection.get(conn_name, {name, self()})
+      reset_timer(:reconnect, :reconnect, 3000)
+      {:keep_state, data}
+    else
+      {:keep_state, data}
+    end
+  end
+
+  def idle(:info, {:connection_ack, conn_pid}, data) do
+    cancel_timer(:reconnect, :reconnect)
+    ref = Process.monitor(conn_pid)
+    {:keep_state, %{data| conn_ref: ref, conn_pid: conn_pid}}
+  end
+
+  def idle(:info, {:connection_report, conn}, %{send_queue: send_queue, chan: channel, ex: ex} = data) do
+    # clear pending msg, let process crashed when publish failed
+    Enum.reverse(send_queue)
+    |> Enum.each(fn {msg, rk, opt} ->
+      :ok = AMQP.Basic.publish(channel, ex, rk, msg, opt)
+    end)
+    {:next_state, :ready, %{data| conn: conn, send_queue: []}}
+  end
+
+  def idle(:info, :quit, %{name: name} = data) do
+    Logger.error("#{name} quiting")
+    {:stop, :normal, data}
+  end
+
+  def idle(ev_type, ev_data, %{name: name} = data) do
+    Logger.error("#{name} drop #{ev_type}:#{inspect ev_data}")
+    {:keep_state, data}
+  end
+
+  def ready(:info, {:basic_deliver, payload, header}, %{name: name, chan: channel, recv_queue: recv_queue} = data) do
+    m = payload_decode(payload, header)
+    mid = header[:message_id]
+    expiration = is_expiration?(header)
+    next_event = send_check(name) do
+      AMQP.Basic.ack(channel, header[:delivery_tag], [])
+    end
+    if expiration == false do
+      pid = Router.get(mid)
+      cond do
+        is_pid(pid) and Process.alive?(pid) == true ->
+          send(pid, {:AMQP, header, m})
+          {:next_state, :ready, data, next_event}
+        is_binary(mid) == false ->
+          {:next_state, :ready, %{data| recv_queue: [{header, m}| recv_queue]}, next_event}
+        true ->
+          Logger.error("#{name} drop by dead #{inspect m}")
+          {:next_state, :ready, data, next_event}
+      end
+    else
+      Logger.error "#{name} drop by expired #{inspect header} : #{inspect m}"
+      {:next_state, :ready, data, next_event}
+    end
+  end
+
+  def ready(:info, {:publish, msg, rk, opt}, %{name: name, chan: channel, ex: ex} = data) do
+    next_event = send_check(name) do
+      AMQP.Basic.publish(channel, ex, rk, msg, opt)
+    end
+    {:next_state, :ready, data, next_event}
+  end
+
+  def ready(:internal, :closed, data) do
+    {:next_state, :idle, %{data| conn: nil}, {:next_event, :info, :reconnect}}
+  end
+
+  def ready(:info, :quit, %{name: name} = data) do
+    Logger.error("#{name} quiting")
+    {:stop, :normal, data}
+  end
+
+  def ready(ev_type, ev_data, %{name: name} = data) do
+    Logger.error("#{name} drop #{ev_type}:#{inspect ev_data}")
+    {:keep_state, data}
+  end
+
+  def callback_mode() do
+    :state_functions
+  end
+
+  def terminate(reason, state_name, %{name: name, chan: channel}) do
+    Logger.error "#{name} dead in #{state_name} by #{inspect reason}"
+    if channel != nil do
+      AMQP.Channel.close(channel)
+    end
+    :ok
+  end
+
+  def is_expiration?(_h) do
+    false
+  end
+
+  def check_close(ret) do
+    case ret do
+      :ok ->
+        []
+      :blocked ->
+        {:next_event, :internal, :closed}
+      :closing ->
+        {:next_event, :internal, :closed}
+    end
+  end
+
+  def payload_encode(msg, opt) do
+    m = if opt[:content_type] == "erl", do: :erlang.term_to_binary(msg), else: msg
+    if opt[:content_encoding] == "gzip" do
+      :zlib.zip(m)
+    else
+      m
+    end
+  end
+
+  def payload_decode(msg, opt) do
+    if opt[:decoded] == true do
+      msg
+    else
+      m = if opt[:content_encoding] == "gzip" do
+        :zlib.unzip(msg)
+      else
+        msg
+      end
+      if opt[:content_type] == "erl", do: :erlang.binary_to_term(m), else: m
+    end
+  end
+end
+
+defmodule AMQPEx.Connection do
+  @moduledoc """
+    handle and maintain connection
+  """
+  use GenServer
+  require Logger
+  import Skn.Util, only: [
+    reset_timer: 3
+  ]
+
+  def get(conn, worker) do
+    GenServer.cast(conn, {:get, worker})
+  end
+
+  def start_link(args) do
+    GenServer.start_link(__MODULE__, args, name: args.name)
+  end
+
+  def init(%{name: name, uri: uri}) do
+    reset_timer(:reconnect, :reconnect, 5_000)
+    {:ok, %{state: :connecting, pid: nil, ref: nil, conn: nil, channels: [], name: name, uri: uri}}
+  end
+
+  def handle_call(_msg, _from, data) do
+    {:reply, :badarg, data}
+  end
+
+  def handle_cast({:get, {worker_name, worker_pid}}, %{state: state, conn: conn, channels: channels} = data) do
+    send(worker_pid, {:connection_ack, self()})
+    if state == :connected do
+      send(worker_pid, {:connection_report, conn})
+    end
+    channels = case List.keyfind(channels, worker_name, 0) do
+      nil ->
+        ref = Process.monitor(worker_pid)
+        List.keystore(channels, worker_name, 0, {worker_name, worker_pid, ref})
+      _ ->
+        channels
+    end
+    {:noreply, %{data| channels: channels}}
+  end
+
+  def handle_cast(msg, data) do
+    Logger.error("drop cast #{inspect msg}")
+    {:noreply, data}
+  end
+
+  def handle_info(:reconnect, %{uri: uri, channels: channels} = data) do
+    case AMQP.Connection.open(uri) do
+      {:ok, conn} ->
+        ref = Process.monitor(conn.pid)
+        Enum.each(channels, fn {_, x, _} -> send(x, {:connection_report, conn}) end)
+        {:noreply, %{data| pid: conn.pid, ref: ref, conn: conn, state: :connected}}
+      {:error, reason} ->
+        Logger.error("connect error #{inspect reason} => retry")
+        reset_timer(:reconnect, :reconnect, get_retry_delay(reason))
+        {:noreply, data}
+    end
+  end
+
+  def handle_info({:DOWN, _, :process, pid, reason}, %{pid: pid} = data) do
+    Logger.error("connection #{inspect pid} dead #{inspect reason}")
+    reset_timer(:reconnect, :reconnect, 1_000)
+    {:noreply, %{data| state: :connecting, pid: nil, ref: nil, conn: nil}}
+  end
+
+  def handle_info(msg, data) do
+    Logger.error("drop info #{inspect msg}")
+    {:noreply, data}
+  end
+
+   def code_change(_vsn, state, _extra) do
+    {:ok, state}
+  end
+
+  def terminate(reason, %{name: name}) do
+    Logger.error("connection #{name} dead #{inspect reason}")
+    :ok
+  end
+
+  def get_retry_delay(:econnrefused), do: 20_000
+  def get_retry_delay(_), do: 10_000
+end

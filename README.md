@@ -1,3 +1,22 @@
-# amqp_ex
+# AMQPEx
 
-AMQP library for Elixir
+**Provide AMQP API for MonkCapital**
+
+## Installation
+
+
+```elixir
+def deps do
+  [
+    {:amqp_ex, "~> 0.1.0"}
+  ]
+end
+```
+
+### Usage
+
+```elixir
+    # include AMQPEx.Sup to root supervisor
+    
+```
+
