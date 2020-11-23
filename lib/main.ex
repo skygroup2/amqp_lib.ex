@@ -4,16 +4,16 @@ defmodule AMQPEx do
   """
   alias AMQPEx.Worker
 
-  def publish(channel, msg, rk, opt) when is_map(opt) do
-    publish(channel, msg, rk, Map.to_list(opt))
+  def publish(worker, msg, rk, opt) when is_map(opt) do
+    publish(worker, msg, rk, Map.to_list(opt))
   end
 
-  def publish(channel, msg, rk, opt) do
-    GenServer.cast(channel, {:publish, Worker.payload_encode(msg, opt), rk, default_ttl(opt)})
+  def publish(worker, msg, rk, opt) do
+    send(worker, {:publish, Worker.payload_encode(msg, opt), rk, default_ttl(opt)})
   end
 
-  def select(channel, fun, default) do
-    GenServer.cast(channel, {:select, self(), fun, default})
+  def select(worker, fun, default) do
+    send(worker, {:select, self(), fun, default})
   end
 
   defp default_ttl(opt) do

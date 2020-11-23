@@ -28,6 +28,22 @@ defmodule AMQPEx.Worker do
     end
   end
 
+  def exchange_name(worker_name) do
+    "ex_#{worker_name}"
+  end
+
+  def queue_name(worker_name) do
+    "ex_#{worker_name}"
+  end
+
+  def routing_key(rk) do
+    case rk do
+      nil -> ""
+      :node -> Atom.to_string(node())
+      _ -> rk
+    end
+  end
+
   def start_link(args) do
     :gen_statem.start_link({:local, args.name}, __MODULE__, args, [])
   end
@@ -36,8 +52,11 @@ defmodule AMQPEx.Worker do
     reset_timer(:reconnect, :reconnect, 5_000)
     reset_timer(:check_tick, :check_tick, 30_000)
     {:ok, :idle, %{
-      name: args.name, recv_queue: [], send_queue: [],
+      name: args.name, type: args.type, recv_queue: [], send_queue: [],
+      ex: exchange_name(args.name), q: queue_name(args.name), rk: routing_key(args.rk),
+      chan: nil, chan_pid: nil, chan_ref: nil, tag: nil,
       conn_name: args.conn_name, conn: nil, conn_pid: nil, conn_ref: nil, conn_get: false,
+      misc: args.misc
     }}
   end
 
@@ -57,13 +76,48 @@ defmodule AMQPEx.Worker do
     {:keep_state, %{data| conn_ref: ref, conn_pid: conn_pid}}
   end
 
-  def idle(:info, {:connection_report, conn}, %{send_queue: send_queue, chan: channel, ex: ex} = data) do
-    # clear pending msg, let process crashed when publish failed
-    Enum.reverse(send_queue)
-    |> Enum.each(fn {msg, rk, opt} ->
-      :ok = AMQP.Basic.publish(channel, ex, rk, msg, opt)
-    end)
-    {:next_state, :ready, %{data| conn: conn, send_queue: []}}
+  def idle(:info, {:connection_report, conn}, %{name: name, type: type, q: q, ex: ex, rk: rk, misc: misc} = data) do
+    # declare channel
+    case AMQP.Channel.open(conn) do
+      {:ok, channel} ->
+        ref = Process.monitor(channel.pid)
+        prefetch_count = Map.get(misc, :prefetch_count, 50)
+        is_consumer = Map.get(misc, :is_consumer, true)
+        ttl = Map.get(misc, :ttl, 120_000)
+        AMQP.Basic.qos(channel, prefetch_count: prefetch_count)
+        AMQP.Queue.declare(channel, q, durable: true, arguments: [{"x-message-ttl", ttl}])
+        case type do
+          :topic ->
+            :ok = AMQP.Exchange.topic(channel, ex, durable: true)
+            :ok = AMQP.Queue.bind(channel, q, ex, routing_key: rk)
+          :direct ->
+            :ok = AMQP.Exchange.direct(channel, ex, durable: true)
+            :ok = AMQP.Queue.bind(channel, q, ex, routing_key: rk)
+          :fanout ->
+            :ok = AMQP.Exchange.fanout(channel, ex, durable: true)
+            :ok = AMQP.Queue.bind(channel, q, ex)
+        end
+        if is_consumer == true do
+          {:ok, tag} = AMQP.Basic.consume(channel, q)
+          {:keep_state, %{data | chan: channel, chan_ref: ref, tag: tag}}
+        else
+          send(self(), :ready_no_consume)
+          {:keep_state, %{data | chan: channel, chan_ref: ref, tag: nil}}
+        end
+      {:error, reason} ->
+        Logger.error("#{name} open channel #{inspect reason}")
+        {:stop, :normal, data}
+    end
+  end
+
+  def idle(:info, {:basic_consume_ok, %{consumer_tag: _tag}}, %{name: name} = data) do
+    Logger.debug("#{name} ready with consume")
+    flush_send_queue(data)
+  end
+
+  def idle(:info, :ready_no_consume, %{name: name} = data) do
+    Logger.debug("#{name} ready no consume")
+    flush_send_queue(data)
   end
 
   def idle(:info, {:publish, msg, rk, opt}, %{send_queue: send_queue} = data) do
@@ -97,6 +151,13 @@ defmodule AMQPEx.Worker do
   def idle(ev_type, ev_data, %{name: name} = data) do
     Logger.error("#{name} drop #{ev_type}:#{inspect ev_data}")
     {:keep_state, data}
+  end
+
+  def flush_send_queue(%{chan: channel, ex: ex, send_queue: send_queue} = data) do
+    Enum.each Enum.reverse(send_queue), fn {msg, rk, opt} ->
+      :ok = AMQP.Basic.publish(channel, ex, rk, msg, opt)
+    end
+    {:next_state, :ready, %{data | send_queue: []}}
   end
 
   def ready(:info, {:basic_deliver, payload, header}, %{name: name, chan: channel, recv_queue: recv_queue} = data) do
