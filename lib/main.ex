@@ -18,7 +18,7 @@ defmodule AMQPEx do
 
   defp default_ttl(opt) do
     ts_now = System.system_time(:millisecond)
-    Keyword.merge(%{timestamp: ts_now, expiration: 120_000}, opt)
+    Keyword.merge(%{timestamp: ts_now, expiration: "120000"}, opt)
   end
 end
 

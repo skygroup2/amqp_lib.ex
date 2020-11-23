@@ -100,26 +100,27 @@ defmodule AMQPEx.Worker do
   end
 
   def ready(:info, {:basic_deliver, payload, header}, %{name: name, chan: channel, recv_queue: recv_queue} = data) do
-    m = payload_decode(payload, header)
-    mid = header[:message_id]
-    expiration = is_expiration?(header)
+    h = format_timestamp(header) |> format_expiration()
+    m = payload_decode(payload, h)
+    mid = h[:message_id]
+    expiration = is_expiration?(h)
     next_event = send_check(name) do
-      AMQP.Basic.ack(channel, header[:delivery_tag], [])
+      AMQP.Basic.ack(channel, h[:delivery_tag], [])
     end
     if expiration == false do
       pid = Router.get(mid)
       cond do
         is_pid(pid) and Process.alive?(pid) == true ->
-          send(pid, {:AMQP, header, m})
+          send(pid, {:AMQP, h, m})
           {:next_state, :ready, data, next_event}
         is_binary(mid) == false ->
-          {:next_state, :ready, %{data| recv_queue: [{header, m}| recv_queue]}, next_event}
+          {:next_state, :ready, %{data| recv_queue: [{h, m}| recv_queue]}, next_event}
         true ->
           Logger.error("#{name} drop by dead #{inspect m}")
           {:next_state, :ready, data, next_event}
       end
     else
-      Logger.error "#{name} drop by expired #{inspect header} : #{inspect m}"
+      Logger.error "#{name} drop by expired #{inspect h} : #{inspect m}"
       {:next_state, :ready, data, next_event}
     end
   end
@@ -178,8 +179,28 @@ defmodule AMQPEx.Worker do
     :ok
   end
 
-  def is_expiration?(_h) do
-    false
+  defp format_timestamp(h) do
+    if is_integer(h[:timestamp]) do
+      h
+    else
+      Keyword.put(h, :timestamp, System.system_time(:millisecond))
+    end
+  end
+
+  defp format_expiration(h) do
+    ex = h[:expiration]
+    cond do
+      is_binary(ex) -> Keyword.put(h, :expiration, String.to_integer(ex))
+      is_integer(ex) -> h
+      true -> Keyword.put(h, :expiration, 120_000)
+    end
+  end
+
+  def is_expiration?(h) do
+    ts_now = System.system_time(:millisecond)
+    ts_pub = h[:timestamp]
+    expiration = h[:expiration]
+    ts_now - ts_pub >= expiration
   end
 
   def remove_expiration(_name, [], acc) do
