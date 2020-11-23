@@ -34,6 +34,7 @@ defmodule AMQPEx.Worker do
 
   def init(args) do
     reset_timer(:reconnect, :reconnect, 5_000)
+    reset_timer(:check_tick, :check_tick, 30_000)
     {:ok, :idle, %{
       name: args.name, recv_queue: [], send_queue: [],
       conn_name: args.conn_name, conn: nil, conn_pid: nil, conn_ref: nil, conn_get: false,
@@ -42,7 +43,7 @@ defmodule AMQPEx.Worker do
 
   def idle(:info, :reconnect, %{name: name, conn_name: conn_name, conn_get: conn_get} = data) do
     if conn_get == false do
-      AMQPEx.Connection.get(conn_name, {name, self()})
+      AMQPEx.Connection.get(conn_name, name, self())
       reset_timer(:reconnect, :reconnect, 3000)
       {:keep_state, data}
     else
@@ -63,6 +64,29 @@ defmodule AMQPEx.Worker do
       :ok = AMQP.Basic.publish(channel, ex, rk, msg, opt)
     end)
     {:next_state, :ready, %{data| conn: conn, send_queue: []}}
+  end
+
+  def idle(:info, {:publish, msg, rk, opt}, %{send_queue: send_queue} = data) do
+    send_queue = [{msg, rk, opt}| send_queue]
+    {:keep_state, %{data| send_queue: send_queue}}
+  end
+
+  def idle(:info, {:select, from, fun, default}, %{name: name, recv_queue: recv_queue} = data) do
+    {h, m, recv_queue} = select_msg(name, recv_queue, fun, default, [])
+    send(from, {:select_ack, self(), h, m})
+    {:keep_state, %{data | recv_queue: recv_queue}}
+  end
+
+  def idle(:info, :check_tick, %{name: name, recv_queue: recv_queue} = data) do
+    recv_queue = remove_expiration(name, recv_queue, [])
+    reset_timer(:check_tick, :check_tick, 25000)
+    {:keep_state, %{data | recv_queue: recv_queue}}
+  end
+
+  def idle(:info, {:DOWN, _, :process, pid, reason}, %{name: name, conn_pid: pid} = data) do
+    Logger.error("#{name} connection dead #{inspect reason}")
+    reset_timer(:reconnect, :reconnect, 3000)
+    {:keep_state, %{data| conn: nil, conn_pid: nil, conn_ref: nil, conn_get: false}}
   end
 
   def idle(:info, :quit, %{name: name} = data) do
@@ -107,8 +131,26 @@ defmodule AMQPEx.Worker do
     {:next_state, :ready, data, next_event}
   end
 
+  def ready(:info, {:select, from, fun, default}, %{name: name, recv_queue: recv_queue} = data) do
+    {h, m, recv_queue} = select_msg(name, recv_queue, fun, default, [])
+    send(from, {:select_ack, self(), h, m})
+    {:keep_state, %{data | recv_queue: recv_queue}}
+  end
+
   def ready(:internal, :closed, data) do
     {:next_state, :idle, %{data| conn: nil}, {:next_event, :info, :reconnect}}
+  end
+
+  def ready(:info, :check_tick, %{name: name, recv_queue: recv_queue} = data) do
+    recv_queue = remove_expiration(name, recv_queue, [])
+    reset_timer(:check_tick, :check_tick, 25000)
+    {:keep_state, %{data | recv_queue: recv_queue}}
+  end
+
+  def ready(:info, {:DOWN, _, :process, pid, reason}, %{name: name, conn_pid: pid} = data) do
+    Logger.error("#{name} connection dead #{inspect reason}")
+    reset_timer(:reconnect, :reconnect, 3000)
+    {:next_state, :idle, %{data| conn: nil, conn_pid: nil, conn_ref: nil, conn_get: false}}
   end
 
   def ready(:info, :quit, %{name: name} = data) do
@@ -125,16 +167,55 @@ defmodule AMQPEx.Worker do
     :state_functions
   end
 
-  def terminate(reason, state_name, %{name: name, chan: channel}) do
+  def terminate(reason, state_name, %{name: name, chan: channel, conn_pid: conn_pid}) do
     Logger.error "#{name} dead in #{state_name} by #{inspect reason}"
     if channel != nil do
       AMQP.Channel.close(channel)
+    end
+    if is_pid(conn_pid) do
+      AMQPEx.Connection.del(conn_pid, name)
     end
     :ok
   end
 
   def is_expiration?(_h) do
     false
+  end
+
+  def remove_expiration(_name, [], acc) do
+    acc
+  end
+
+  def remove_expiration(name, [{h, m} | ret], acc) do
+    expiration = is_expiration?(h)
+    if expiration == false do
+      remove_expiration(name, ret, [{h, m} | acc])
+    else
+      Logger.error "#{name} remove expiration #{inspect h} : #{inspect m}"
+      remove_expiration(name, ret, acc)
+    end
+  end
+
+  def select_msg(_name, [], _fun, default, acc) do
+    {false, default, acc}
+  end
+
+  def select_msg(name, [{h, m} | ret], fun, default, acc) do
+    expiration = is_expiration?(h)
+    if expiration == false do
+      cond do
+        fun == nil ->
+          {h, m, acc ++ ret}
+        fun.(h, m) == true ->
+          {h, m, acc ++ ret}
+        true ->
+          select_msg(name, ret, fun, default, [{h, m} | acc])
+      end
+    else
+      # remove expired message
+      Logger.error "#{name} remove expiration #{inspect h} : #{inspect m}"
+      select_msg(name, ret, fun, default, acc)
+    end
   end
 
   def check_close(ret) do
@@ -158,16 +239,12 @@ defmodule AMQPEx.Worker do
   end
 
   def payload_decode(msg, opt) do
-    if opt[:decoded] == true do
-      msg
+    m = if opt[:content_encoding] == "gzip" do
+      :zlib.unzip(msg)
     else
-      m = if opt[:content_encoding] == "gzip" do
-        :zlib.unzip(msg)
-      else
-        msg
-      end
-      if opt[:content_type] == "erl", do: :erlang.binary_to_term(m), else: m
+      msg
     end
+    if opt[:content_type] == "erl", do: :erlang.binary_to_term(m), else: m
   end
 end
 
@@ -181,8 +258,12 @@ defmodule AMQPEx.Connection do
     reset_timer: 3
   ]
 
-  def get(conn, worker) do
-    GenServer.cast(conn, {:get, worker})
+  def get(conn, worker_name, worker_pid) do
+    GenServer.cast(conn, {:get, worker_name, worker_pid})
+  end
+
+  def del(conn, worker_name) do
+    GenServer.cast(conn, worker_name)
   end
 
   def start_link(args) do
@@ -198,7 +279,7 @@ defmodule AMQPEx.Connection do
     {:reply, :badarg, data}
   end
 
-  def handle_cast({:get, {worker_name, worker_pid}}, %{state: state, conn: conn, channels: channels} = data) do
+  def handle_cast({:get, worker_name, worker_pid}, %{state: state, conn: conn, channels: channels} = data) do
     send(worker_pid, {:connection_ack, self()})
     if state == :connected do
       send(worker_pid, {:connection_report, conn})
