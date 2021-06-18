@@ -33,7 +33,7 @@ defmodule AMQPEx.Worker do
   end
 
   def queue_name(worker_name) do
-    "ex_#{worker_name}"
+    "q_#{worker_name}"
   end
 
   def routing_key(rk) do
