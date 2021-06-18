@@ -161,7 +161,7 @@ defmodule AMQPEx.Worker do
   end
 
   def ready(:info, {:basic_deliver, payload, header}, %{name: name, chan: channel, recv_queue: recv_queue} = data) do
-    h = format_timestamp(header) |> format_expiration()
+    h = format_timestamp(header)
     m = payload_decode(payload, h)
     mid = h[:message_id]
     expiration = is_expiration?(h)
@@ -248,20 +248,10 @@ defmodule AMQPEx.Worker do
     end
   end
 
-  defp format_expiration(h) do
-    ex = h[:expiration]
-    cond do
-      is_binary(ex) -> Keyword.put(h, :expiration, String.to_integer(ex))
-      is_integer(ex) -> h
-      true -> Keyword.put(h, :expiration, 120_000)
-    end
-  end
-
   def is_expiration?(h) do
     ts_now = System.system_time(:millisecond)
-    ts_pub = h[:timestamp]
-    expiration = h[:expiration]
-    ts_now - ts_pub >= expiration
+    ts_expire = h[:timestamp]
+    ts_now > ts_expire
   end
 
   def remove_expiration(_name, [], acc) do
