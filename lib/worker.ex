@@ -32,8 +32,11 @@ defmodule AMQPEx.Worker do
     "ex_#{worker_name}"
   end
 
-  def queue_name(worker_name) do
+  def queue_name(worker_name, nil) do
     "q_#{worker_name}"
+  end
+  def queue_name(worker_name, rk) do
+    "q_#{worker_name}_#{rk}"
   end
 
   def routing_key(rk) do
@@ -53,7 +56,7 @@ defmodule AMQPEx.Worker do
     reset_timer(:check_tick, :check_tick, 30_000)
     {:ok, :idle, %{
       name: args.name, type: args.type, recv_queue: [], send_queue: [],
-      ex: exchange_name(args.name), q: queue_name(args.name), rk: routing_key(args.rk),
+      ex: exchange_name(args.name), q: queue_name(args.name, args.name_ext), rk: routing_key(args.rk),
       chan: nil, chan_pid: nil, chan_ref: nil, tag: nil,
       conn_name: args.conn_name, conn: nil, conn_pid: nil, conn_ref: nil, conn_get: false,
       misc: args.misc
