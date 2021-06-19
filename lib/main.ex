@@ -9,16 +9,11 @@ defmodule AMQPEx do
   end
 
   def publish(worker, msg, rk, opt) do
-    send(worker, {:publish, Worker.payload_encode(msg, opt), rk, default_ttl(opt)})
+    send(worker, {:publish, Worker.payload_encode(msg, opt), rk, opt})
   end
 
   def select(worker, fun, default) do
     send(worker, {:select, self(), fun, default})
-  end
-
-  defp default_ttl(opt) do
-    ts_now = System.system_time(:millisecond)
-    Keyword.merge(%{timestamp: ts_now, expiration: "120000"}, opt)
   end
 end
 
