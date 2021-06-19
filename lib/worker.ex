@@ -254,7 +254,7 @@ defmodule AMQPEx.Worker do
   def is_expiration?(h) do
     ts_now = System.system_time(:millisecond)
     ts_expire = h[:timestamp]
-    ts_now > ts_expire
+    ts_now < ts_expire
   end
 
   def remove_expiration(_name, [], acc) do
