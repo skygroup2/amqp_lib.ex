@@ -87,7 +87,7 @@ defmodule AMQPEx.Worker do
     # declare channel
     case AMQP.Channel.open(conn) do
       {:ok, channel} ->
-        ref = Process.monitor(channel.pid)
+#        ref = Process.monitor(channel.pid)
         prefetch_count = Map.get(misc, :prefetch_count, 50)
         is_consumer = Map.get(misc, :is_consumer, true)
         ttl = Map.get(misc, :ttl, 120_000)
@@ -106,10 +106,10 @@ defmodule AMQPEx.Worker do
         end
         if is_consumer == true do
           {:ok, tag} = AMQP.Basic.consume(channel, q)
-          {:keep_state, %{data | chan: channel, chan_ref: ref, tag: tag}}
+          {:keep_state, %{data | chan: channel, chan_ref: nil, tag: tag}}
         else
           send(self(), :ready_no_consume)
-          {:keep_state, %{data | chan: channel, chan_ref: ref, tag: nil}}
+          {:keep_state, %{data | chan: channel, chan_ref: nil, tag: nil}}
         end
       {:error, reason} ->
         Logger.error("#{name} open channel #{inspect reason}")
