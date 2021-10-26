@@ -73,10 +73,14 @@ defmodule AMQPEx.Worker do
     end
   end
 
-  def idle(:info, {:connection_ack, conn_pid}, data) do
+  def idle(:info, {:connection_ack, conn_pid}, %{conn_pid: old_conn_pid} = data) do
     cancel_timer(:reconnect, :reconnect)
-    ref = Process.monitor(conn_pid)
-    {:keep_state, %{data| conn_ref: ref, conn_pid: conn_pid}}
+    if old_conn_pid != conn_pid do
+      ref = Process.monitor(conn_pid)
+      {:keep_state, %{data| conn_ref: ref, conn_pid: conn_pid}}
+    else
+      {:keep_state, data}
+    end
   end
 
   def idle(:info, {:connection_report, conn}, %{name: name, type: type, q: q, ex: ex, rk: rk, misc: misc} = data) do
@@ -378,7 +382,10 @@ defmodule AMQPEx.Connection do
     case AMQP.Connection.open(uri) do
       {:ok, conn} ->
         ref = Process.monitor(conn.pid)
-        Enum.each(channels, fn {_, x, _} -> send(x, {:connection_report, conn}) end)
+        Enum.each(channels, fn {_, x, _} ->
+          send(x, {:connection_ack, self()})
+          send(x, {:connection_report, conn})
+        end)
         {:noreply, %{data| pid: conn.pid, ref: ref, conn: conn, state: :connected}}
       {:error, reason} ->
         Logger.error("connect error #{inspect reason} => retry")
