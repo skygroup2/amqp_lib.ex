@@ -359,8 +359,8 @@ defmodule AMQPEx.Connection do
   end
 
   def handle_cast({:get, worker_name, worker_pid}, %{state: state, conn: conn, channels: channels} = data) do
-    send(worker_pid, {:connection_ack, self()})
     if state == :connected do
+      send(worker_pid, {:connection_ack, conn.pid})
       send(worker_pid, {:connection_report, conn})
     end
     channels = case List.keyfind(channels, worker_name, 0) do
@@ -383,7 +383,7 @@ defmodule AMQPEx.Connection do
       {:ok, conn} ->
         ref = Process.monitor(conn.pid)
         Enum.each(channels, fn {_, x, _} ->
-          send(x, {:connection_ack, self()})
+          send(x, {:connection_ack, conn.pid})
           send(x, {:connection_report, conn})
         end)
         {:noreply, %{data| pid: conn.pid, ref: ref, conn: conn, state: :connected}}
