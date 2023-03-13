@@ -132,10 +132,12 @@ defmodule AMQPEx.Worker do
     {:keep_state, %{data| send_queue: send_queue}}
   end
 
-  def idle(:info, {:select, from, fun, default}, %{name: name, recv_queue: recv_queue} = data) do
-    {h, m, recv_queue} = select_msg(name, recv_queue, fun, default, [])
-    send(from, {:select_ack, self(), h, m})
-    {:keep_state, %{data | recv_queue: recv_queue}}
+  def idle(:info, {:flush, from, fun}, data) do
+    process_flush_recv(from, fun, data)
+  end
+
+  def idle(:info, {:select, from, fun, default}, data) do
+    process_select_recv(from, fun, default, data)
   end
 
   def idle(:info, :check_tick, %{name: name, recv_queue: recv_queue} = data) do
@@ -200,6 +202,10 @@ defmodule AMQPEx.Worker do
     {:next_state, :ready, data, next_event}
   end
 
+  def ready(:info, {:flush, from, fun}, data) do
+    process_flush_recv(from, fun, data)
+  end
+
   def ready(:info, {:select, from, fun, default}, %{name: name, recv_queue: recv_queue} = data) do
     {h, m, recv_queue} = select_msg(name, recv_queue, fun, default, [])
     send(from, {:select_ack, self(), h, m})
@@ -230,6 +236,21 @@ defmodule AMQPEx.Worker do
   def ready(ev_type, ev_data, %{name: name} = data) do
     Logger.error("#{name} drop #{ev_type}:#{inspect ev_data}")
     {:keep_state, data}
+  end
+
+  def process_flush_recv(from, fun, %{name: name, recv_queue: recv_queue} = data) when is_function(fun) do
+    {ret, recv_queue} = flush_msg(recv_queue, name, fun, [], [])
+    Enum.each(ret, fn {h, m} -> send(from, {:AMQP, h, m}) end)
+    {:keep_state, %{data| recv_queue: recv_queue}}
+  end
+  def process_flush_recv(_from, _fun, data) do
+    {:keep_state, data}
+  end
+
+  def process_select_recv(from, fun, default, %{name: name, recv_queue: recv_queue} = data) do
+    {h, m, recv_queue} = select_msg(name, recv_queue, fun, default, [])
+    send(from, {:select_ack, self(), h, m})
+    {:keep_state, %{data | recv_queue: recv_queue}}
   end
 
   def callback_mode() do
@@ -272,6 +293,22 @@ defmodule AMQPEx.Worker do
     else
       Logger.error "#{name} remove expiration #{inspect h} : #{inspect m}"
       remove_expiration(name, ret, acc)
+    end
+  end
+
+  def flush_msg([], _name, _fun, ret, acc) do
+    {ret, Enum.reverse(acc)}
+  end
+  def flush_msg([{h, m}| remain], name, fun, ret, acc) do
+    if is_expiration?(h) == false do
+      if fun.(h, m) == true do
+        flush_msg(remain, name, fun, [{h, m}| ret], acc)
+      else
+        flush_msg(remain, name, fun, ret, [{h, m}| acc])
+      end
+    else
+      Logger.error "#{name} remove expiration #{inspect h} : #{inspect m}"
+      flush_msg(remain, name, fun, ret, acc)
     end
   end
 
