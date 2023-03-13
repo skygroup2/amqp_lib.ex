@@ -243,8 +243,23 @@ defmodule AMQPEx.Worker do
     Enum.each(ret, fn {h, m} -> send(from, {:AMQP, h, m}) end)
     {:keep_state, %{data| recv_queue: recv_queue}}
   end
-  def process_flush_recv(_from, _fun, data) do
-    {:keep_state, data}
+  def process_flush_recv(_from, nil, %{name: name, recv_queue: recv_queue} = data) do
+    recv_queue = Enum.reduce(Enum.reverse(recv_queue), [], fn {h, m}, acc ->
+      if is_expiration?(h) == false do
+        mid = h[:message_id]
+        pid = Router.get(mid)
+        if is_pid(pid) and Process.alive?(pid) == true do
+          send(pid, {:AMQP, h, m})
+          acc
+        else
+          [{h, m}| acc]
+        end
+      else
+        Logger.error "#{name} drop by expired #{inspect h} : #{inspect m}"
+        acc
+      end
+    end)
+    {:keep_state, %{data| recv_queue: recv_queue}}
   end
 
   def process_select_recv(from, fun, default, %{name: name, recv_queue: recv_queue} = data) do
