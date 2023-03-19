@@ -197,7 +197,7 @@ defmodule AMQPEx.Worker do
 
   def ready(:info, {:publish, msg, rk, opt}, %{name: name, chan: channel, ex: ex} = data) do
     next_event = send_check(name) do
-      AMQP.Basic.publish(channel, ex, rk, msg, opt)
+      :ok = AMQP.Basic.publish(channel, ex, rk, msg, opt)
     end
     {:next_state, :ready, data, next_event}
   end
