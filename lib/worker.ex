@@ -87,7 +87,7 @@ defmodule AMQPEx.Worker do
     # declare channel
     case AMQP.Channel.open(conn) do
       {:ok, channel} ->
-#        ref = Process.monitor(channel.pid)
+        ref = Process.monitor(channel.pid)
         prefetch_count = Map.get(misc, :prefetch_count, 50)
         is_consumer = Map.get(misc, :is_consumer, true)
         ttl = Map.get(misc, :ttl, 120_000)
@@ -106,10 +106,10 @@ defmodule AMQPEx.Worker do
         end
         if is_consumer == true do
           {:ok, tag} = AMQP.Basic.consume(channel, q)
-          {:keep_state, %{data | chan: channel, chan_ref: nil, tag: tag}}
+          {:keep_state, %{data | chan: channel, chan_ref: ref, chan_pid: channel.pid, tag: tag}}
         else
           send(self(), :ready_no_consume)
-          {:keep_state, %{data | chan: channel, chan_ref: nil, tag: nil}}
+          {:keep_state, %{data | chan: channel, chan_ref: ref, chan_pid: channel.pid, tag: nil}}
         end
       {:error, reason} ->
         Logger.error("#{name} open channel #{inspect reason}")
@@ -226,6 +226,12 @@ defmodule AMQPEx.Worker do
     Logger.error("#{name} connection dead #{inspect reason}")
     reset_timer(:reconnect, :reconnect, 3000)
     {:next_state, :idle, %{data| conn: nil, conn_pid: nil, conn_ref: nil, conn_get: false}}
+  end
+
+  def ready(:info, {:DOWN, _, :process, pid, reason}, %{name: name, chan_pid: pid} = data) do
+    Logger.error("#{name} channel dead #{inspect reason}")
+    reset_timer(:reconnect, :reconnect, 3000)
+    {:next_state, :idle, %{data| chan: nil, chan_pid: nil, chan_ref: nil, conn_get: false}}
   end
 
   def ready(:info, :quit, %{name: name} = data) do
