@@ -391,6 +391,7 @@ defmodule AMQPEx.Connection do
   """
   use GenServer
   require Logger
+  require Skn.Log
   import Skn.Util, only: [
     reset_timer: 3
   ]
@@ -432,7 +433,7 @@ defmodule AMQPEx.Connection do
   end
 
   def handle_cast(msg, data) do
-    Logger.error("drop cast #{inspect msg}")
+    Skn.Log.error("drop cast #{inspect msg}")
     {:noreply, data}
   end
 
@@ -446,20 +447,20 @@ defmodule AMQPEx.Connection do
         end)
         {:noreply, %{data| pid: conn.pid, ref: ref, conn: conn, state: :connected}}
       {:error, reason} ->
-        Logger.error("connect error #{inspect reason} => retry")
+        Skn.Log.error("connect error #{inspect reason} => retry")
         reset_timer(:reconnect, :reconnect, get_retry_delay(reason))
         {:noreply, data}
     end
   end
 
   def handle_info({:DOWN, _, :process, pid, reason}, %{pid: pid} = data) do
-    Logger.error("connection #{inspect pid} dead #{inspect reason}")
+    Skn.Log.error("connection #{inspect pid} dead #{inspect reason}")
     reset_timer(:reconnect, :reconnect, 1_000)
     {:noreply, %{data| state: :connecting, pid: nil, ref: nil, conn: nil}}
   end
 
   def handle_info(msg, data) do
-    Logger.error("drop info #{inspect msg}")
+    Skn.Log.error("drop info #{inspect msg}")
     {:noreply, data}
   end
 
@@ -468,7 +469,7 @@ defmodule AMQPEx.Connection do
   end
 
   def terminate(reason, %{name: name}) do
-    Logger.error("connection #{name} dead #{inspect reason}")
+    Skn.Log.error("connection #{name} dead #{inspect reason}")
     :ok
   end
 
