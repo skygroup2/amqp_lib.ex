@@ -59,7 +59,7 @@ defmodule AMQPEx.Worker do
       ex: exchange_name(args.name), q: queue_name(args.name, args.name_ext), rk: routing_key(args.rk),
       chan: nil, chan_pid: nil, chan_ref: nil, tag: nil,
       conn_name: args.conn_name, conn: nil, conn_pid: nil, conn_ref: nil, conn_get: false,
-      misc: args.misc
+      misc: args.misc, tick_interval: Map.get(args.misc, :tick_interval, 10_000)
     }}
   end
 
@@ -140,9 +140,9 @@ defmodule AMQPEx.Worker do
     process_select_recv(from, fun, default, data)
   end
 
-  def idle(:info, :check_tick, %{name: name, recv_queue: recv_queue} = data) do
+  def idle(:info, :check_tick, %{name: name, recv_queue: recv_queue, tick_interval: tick_interval} = data) do
     recv_queue = remove_expiration(name, recv_queue, [])
-    reset_timer(:check_tick, :check_tick, 25000)
+    reset_timer(:check_tick, :check_tick, tick_interval)
     {:keep_state, %{data | recv_queue: recv_queue}}
   end
 
@@ -219,7 +219,7 @@ defmodule AMQPEx.Worker do
   def ready(:info, :check_tick, %{name: name, recv_queue: recv_queue} = data) do
     recv_queue = remove_expiration(name, recv_queue, [])
     reset_timer(:check_tick, :check_tick, 25000)
-    {:keep_state, %{data | recv_queue: recv_queue}}
+    ready(:info, {:flush, nil, nil}, %{data | recv_queue: recv_queue})
   end
 
   def ready(:info, {:DOWN, _, :process, pid, reason}, %{name: name, conn_pid: pid} = data) do
