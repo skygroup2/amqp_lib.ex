@@ -190,7 +190,7 @@ defmodule AMQPEx.Worker do
           {:next_state, :ready, data, next_event}
       end
     else
-      Logger.error "#{name} drop by expired #{inspect h} : #{inspect m}"
+      Logger.error "#{name} drop by EXPIRED #{inspect h}"
       {:next_state, :ready, data, next_event}
     end
   end
@@ -261,7 +261,7 @@ defmodule AMQPEx.Worker do
           [{h, m}| acc]
         end
       else
-        Logger.error "#{name} drop by expired #{inspect h} : #{inspect m}"
+        Logger.error "#{name} drop by EXPIRED #{inspect h}"
         acc
       end
     end)
@@ -316,7 +316,7 @@ defmodule AMQPEx.Worker do
     if expiration == false do
       remove_expiration(name, ret, [{h, m} | acc])
     else
-      Logger.error "#{name} remove expiration #{inspect h} : #{inspect m}"
+      Logger.error "#{name} remove EXPIRED #{inspect h}"
       remove_expiration(name, ret, acc)
     end
   end
@@ -332,7 +332,7 @@ defmodule AMQPEx.Worker do
         flush_msg(remain, name, fun, ret, [{h, m}| acc])
       end
     else
-      Logger.error "#{name} remove expiration #{inspect h} : #{inspect m}"
+      Logger.error "#{name} remove EXPIRED #{inspect h}"
       flush_msg(remain, name, fun, ret, acc)
     end
   end
@@ -354,7 +354,7 @@ defmodule AMQPEx.Worker do
       end
     else
       # remove expired message
-      Logger.error "#{name} remove expiration #{inspect h} : #{inspect m}"
+      Logger.error "#{name} remove EXPIRED #{inspect h}"
       select_msg(name, ret, fun, default, acc)
     end
   end
