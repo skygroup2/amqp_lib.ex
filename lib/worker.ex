@@ -183,10 +183,10 @@ defmodule AMQPEx.Worker do
         is_pid(pid) and Process.alive?(pid) == true ->
           send(pid, {:AMQP, h, m})
           {:next_state, :ready, data, next_event}
-        is_binary(mid) == false ->
+        is_binary(mid) == true ->
           {:next_state, :ready, %{data| recv_queue: [{h, m}| recv_queue]}, next_event}
         true ->
-          Logger.error("#{name} drop by dead #{inspect m}")
+          Logger.error("#{name} drop by NO_ROUTE #{inspect h}")
           {:next_state, :ready, data, next_event}
       end
     else
