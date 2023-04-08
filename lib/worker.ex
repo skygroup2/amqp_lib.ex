@@ -52,8 +52,8 @@ defmodule AMQPEx.Worker do
   end
 
   def init(args) do
-    reset_timer(:reconnect, :reconnect, 5_000)
-    reset_timer(:check_tick, :check_tick, 30_000)
+    reset_timer(:reconnect, :reconnect, 1_000)
+    reset_timer(:check_tick, :check_tick, 20_000)
     {:ok, :idle, %{
       name: args.name, type: args.type, recv_queue: [], send_queue: [],
       ex: exchange_name(args.name), q: queue_name(args.name, args.name_ext), rk: routing_key(args.rk),
@@ -413,7 +413,7 @@ defmodule AMQPEx.Connection do
   end
 
   def init(%{name: name, uri: uri}) do
-    reset_timer(:reconnect, :reconnect, 5_000)
+    reset_timer(:reconnect, :reconnect, 1_000)
     {:ok, %{state: :connecting, pid: nil, ref: nil, conn: nil, channels: [], name: name, uri: uri}}
   end
 
