@@ -21,7 +21,7 @@ defmodule AmqpEx.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:skn_lib, git: "git@github.com:skygroup2/skn_lib.git", branch: "master"},
+      {:skn_lib, git: "git@github.com:skygroup2/skn_lib.git", branch: "main"},
       {:amqp, "~> 3.2"},
       {:credo, "~> 1.7", only: [:dev], runtime: false},
       {:dialyxir, "~> 1.2", only: [:dev], runtime: false}
