@@ -118,7 +118,9 @@ defmodule AMQPEx.Worker do
   end
 
   def idle(:info, {:connection_report, conn}, %{name: name, conn: old_conn} = data) do
-    Logger.error("#{name} connection conflict? #{inspect conn} vs #{inspect old_conn}")
+    if conn != old_conn do
+      Logger.error("#{name} connection conflict? #{inspect conn} vs #{inspect old_conn}")
+    end
     {:keep_state, data}
   end
 
