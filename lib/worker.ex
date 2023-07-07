@@ -117,7 +117,7 @@ defmodule AMQPEx.Worker do
     end
   end
 
-  def idle(:info, {:basic_consume_ok, %{consumer_tag: _tag}}, %{name: name} = data) do
+  def idle(:info, {:basic_consume_ok, %{consumer_tag: tag}}, %{name: name, tag: tag} = data) do
     Logger.debug("#{name} ready with consume")
     flush_send_queue(data)
   end
