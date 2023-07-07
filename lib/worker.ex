@@ -66,7 +66,7 @@ defmodule AMQPEx.Worker do
   def idle(:info, :reconnect, %{name: name, conn_name: conn_name, conn_get: conn_get} = data) do
     if conn_get == false do
       AMQPEx.Connection.get(conn_name, name, self())
-      reset_timer(:reconnect, :reconnect, 3000)
+      reset_timer(:reconnect, :reconnect, 5000)
       {:keep_state, data}
     else
       {:keep_state, data}
