@@ -85,6 +85,7 @@ defmodule AMQPEx.Worker do
 
   def idle(:info, {:connection_report, conn}, %{name: name, type: type, q: q, ex: ex, rk: rk, misc: misc} = data) do
     # declare channel
+    Logger.debug("#{name} connection ready #{inspect conn}")
     case AMQP.Channel.open(conn) do
       {:ok, channel} ->
         ref = Process.monitor(channel.pid)
