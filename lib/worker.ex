@@ -83,9 +83,8 @@ defmodule AMQPEx.Worker do
     end
   end
 
-  def idle(:info, {:connection_report, conn}, %{name: name, type: type, q: q, ex: ex, rk: rk, misc: misc} = data) do
+  def idle(:info, {:connection_report, conn}, %{name: name, chan: nil, type: type, q: q, ex: ex, rk: rk, misc: misc} = data) do
     # declare channel
-    Logger.debug("#{name} connection ready #{inspect conn}")
     case AMQP.Channel.open(conn) do
       {:ok, channel} ->
         ref = Process.monitor(channel.pid)
@@ -106,8 +105,12 @@ defmodule AMQPEx.Worker do
             :ok = AMQP.Queue.bind(channel, q, ex)
         end
         if is_consumer == true do
-          {:ok, tag} = AMQP.Basic.consume(channel, q)
-          {:keep_state, %{data | chan: channel, chan_ref: ref, chan_pid: channel.pid, tag: tag}}
+          if data.tag == nil do
+            {:ok, tag} = AMQP.Basic.consume(channel, q)
+            {:keep_state, %{data | chan: channel, chan_ref: ref, chan_pid: channel.pid, tag: tag}}
+          else
+
+          end
         else
           send(self(), :ready_no_consume)
           {:keep_state, %{data | chan: channel, chan_ref: ref, chan_pid: channel.pid, tag: nil}}
@@ -118,9 +121,14 @@ defmodule AMQPEx.Worker do
     end
   end
 
+  def idle(:info, {:connection_report, conn}, %{name: name, conn: old_conn} = data) do
+    Logger.error("#{name} connection conflict? #{inspect conn} vs #{inspect old_conn}")
+    {:keep_state, data}
+  end
+
   def idle(:info, {:basic_consume_ok, %{consumer_tag: tag}}, %{name: name, tag: tag} = data) do
     Logger.debug("#{name} ready with consume")
-    flush_send_queue(data)
+    flush_send_queue(%{data| tag: nil})
   end
 
   def idle(:info, :ready_no_consume, %{name: name} = data) do
@@ -213,8 +221,12 @@ defmodule AMQPEx.Worker do
     {:keep_state, %{data | recv_queue: recv_queue}}
   end
 
-  def ready(:internal, :closed, data) do
-    {:next_state, :idle, %{data| conn: nil}, {:next_event, :info, :reconnect}}
+  def ready(:internal, :closed, %{name: name, chan: channel} = data) do
+    Logger.error("#{name} channel closed")
+    if channel != nil do
+      AMQP.Channel.close(channel)
+    end
+    {:next_state, :idle, %{data| chan: nil}, {:next_event, :info, :reconnect}}
   end
 
   def ready(:info, :check_tick, %{name: name, recv_queue: recv_queue} = data) do
@@ -357,17 +369,6 @@ defmodule AMQPEx.Worker do
       # remove expired message
       Logger.error "#{name} remove EXPIRED #{inspect h}"
       select_msg(name, ret, fun, default, acc)
-    end
-  end
-
-  def check_close(ret) do
-    case ret do
-      :ok ->
-        []
-      :blocked ->
-        {:next_event, :internal, :closed}
-      :closing ->
-        {:next_event, :internal, :closed}
     end
   end
 
