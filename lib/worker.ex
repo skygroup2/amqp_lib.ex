@@ -105,15 +105,11 @@ defmodule AMQPEx.Worker do
             :ok = AMQP.Queue.bind(channel, q, ex)
         end
         if is_consumer == true do
-          if data.tag == nil do
-            {:ok, tag} = AMQP.Basic.consume(channel, q)
-            {:keep_state, %{data | chan: channel, chan_ref: ref, chan_pid: channel.pid, tag: tag}}
-          else
-
-          end
+          {:ok, tag} = AMQP.Basic.consume(channel, q)
+          {:keep_state, %{data | conn: conn, chan: channel, chan_ref: ref, chan_pid: channel.pid, tag: tag}}
         else
           send(self(), :ready_no_consume)
-          {:keep_state, %{data | chan: channel, chan_ref: ref, chan_pid: channel.pid, tag: nil}}
+          {:keep_state, %{data | conn: conn, chan: channel, chan_ref: ref, chan_pid: channel.pid, tag: nil}}
         end
       {:error, reason} ->
         Logger.error("#{name} open channel #{inspect reason}")
