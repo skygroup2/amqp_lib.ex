@@ -301,20 +301,24 @@ defmodule AMQPEx.Worker do
   end
 
   defp format_expiration(h) do
-    expiration = h[:expiration]
-    cond do
-      is_integer(expiration) ->
-        h
-      is_binary(expiration) ->
-        %{h| expiration: String.to_integer(expiration)}
-      true ->
-        %{h| expiration: System.system_time(:second) + 120}
-    end
+    headers = if is_list(h[:headers]), do: h[:headers], else: []
+    expiration = System.system_time(:millisecond) + 120_000
+    {ex_map, hdrs} = Enum.reduce(List.wrap(headers), {%{x_expiration: expiration}, []}, fn {k, t, v}, {acc, acc_hdrs} ->
+      case k do
+        "x-expiration" ->
+          {Map.put(acc, :x_expiration, v), acc_hdrs}
+        "x-timestamp" ->
+          {Map.put(acc, :x_timestamp, v), acc_hdrs}
+        _ ->
+          {acc, [{k, t, v}| acc_hdrs]}
+      end
+    end)
+    Map.merge(h, ex_map) |> Map.put(:headers, hdrs)
   end
 
   def is_expiration?(h) do
-    ts_now = System.system_time(:second)
-    ts_expiration = h[:expiration]
+    ts_now = System.system_time(:millisecond)
+    ts_expiration = h[:x_expiration]
     ts_now > ts_expiration
   end
 
