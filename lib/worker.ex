@@ -117,9 +117,9 @@ defmodule AMQPEx.Worker do
     end
   end
 
-  def idle(:info, {:connection_report, conn}, %{name: name, conn: old_conn} = data) do
+  def idle(:info, {:connection_report, conn}, %{name: name, conn: old_conn, chan: chan} = data) do
     if conn != old_conn do
-      Logger.error("#{name} connection conflict? #{inspect conn} vs #{inspect old_conn}")
+      Logger.error("#{name} connection conflict? #{inspect conn} vs #{inspect old_conn}, #{inspect chan}")
     end
     {:keep_state, data}
   end
@@ -156,7 +156,7 @@ defmodule AMQPEx.Worker do
   def idle(:info, {:DOWN, _, :process, pid, reason}, %{name: name, conn_pid: pid} = data) do
     Logger.error("#{name} connection dead #{inspect reason}")
     reset_timer(:reconnect, :reconnect, 3000)
-    {:keep_state, %{data| conn: nil, conn_pid: nil, conn_ref: nil, conn_get: false}}
+    {:keep_state, %{data| conn: nil, conn_pid: nil, conn_ref: nil, chan: nil, conn_get: false}}
   end
 
   def idle(:info, :quit, %{name: name} = data) do
@@ -165,7 +165,7 @@ defmodule AMQPEx.Worker do
   end
 
   def idle(ev_type, ev_data, %{name: name} = data) do
-    Logger.error("#{name} drop #{ev_type}:#{inspect ev_data}")
+    Logger.error("#{name} drop #{inspect ev_type}:#{inspect ev_data}")
     {:keep_state, data}
   end
 
@@ -236,7 +236,7 @@ defmodule AMQPEx.Worker do
   def ready(:info, {:DOWN, _, :process, pid, reason}, %{name: name, conn_pid: pid} = data) do
     Logger.error("#{name} connection dead #{inspect reason}")
     reset_timer(:reconnect, :reconnect, 3000)
-    {:next_state, :idle, %{data| conn: nil, conn_pid: nil, conn_ref: nil, conn_get: false}}
+    {:next_state, :idle, %{data| conn: nil, conn_pid: nil, conn_ref: nil, chan: nil, conn_get: false}}
   end
 
   def ready(:info, {:DOWN, _, :process, pid, reason}, %{name: name, chan_pid: pid} = data) do
@@ -251,7 +251,7 @@ defmodule AMQPEx.Worker do
   end
 
   def ready(ev_type, ev_data, %{name: name} = data) do
-    Logger.error("#{name} drop #{ev_type}:#{inspect ev_data}")
+    Logger.error("#{name} drop #{inspect ev_type}:#{inspect ev_data}")
     {:keep_state, data}
   end
 
