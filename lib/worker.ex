@@ -15,7 +15,7 @@ defmodule AMQPEx.Worker do
         ret = unquote(expression)
         case ret do
           :ok -> []
-          :closing ->
+          {:error, :closing} ->
             Logger.error("#{unquote(name)} send closing")
             {:next_event, :internal, :closed}
           # :blocked -> let this process crashed

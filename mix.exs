@@ -22,7 +22,7 @@ defmodule AmqpEx.MixProject do
   defp deps do
     [
       {:skn_lib, git: "git@github.com:skygroup2/skn_lib.git", branch: "main"},
-      {:amqp, "~> 3.2"},
+      {:amqp, "~> 4.0"},
       {:credo, "~> 1.7", only: [:dev], runtime: false},
       {:dialyxir, "~> 1.2", only: [:dev], runtime: false}
     ]
