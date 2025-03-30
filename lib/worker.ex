@@ -90,18 +90,19 @@ defmodule AMQPEx.Worker do
         ref = Process.monitor(channel.pid)
         prefetch_count = Map.get(misc, :prefetch_count, 50)
         is_consumer = Map.get(misc, :is_consumer, true)
-        ttl = Map.get(misc, :ttl, 120_000)
+        queue_args = Map.get(misc, :queue_args, [{"x-message-ttl", 120_000}, {"x-max-length", 10_000}])
+        durable = Map.get(misc, :durable, false)
         AMQP.Basic.qos(channel, prefetch_count: prefetch_count)
-        AMQP.Queue.declare(channel, q, durable: true, arguments: [{"x-message-ttl", ttl}])
+        AMQP.Queue.declare(channel, q, durable: durable, arguments: queue_args)
         case type do
           :topic ->
-            :ok = AMQP.Exchange.topic(channel, ex, durable: true)
+            :ok = AMQP.Exchange.topic(channel, ex, durable: durable)
             :ok = AMQP.Queue.bind(channel, q, ex, routing_key: rk)
           :direct ->
-            :ok = AMQP.Exchange.direct(channel, ex, durable: true)
+            :ok = AMQP.Exchange.direct(channel, ex, durable: durable)
             :ok = AMQP.Queue.bind(channel, q, ex, routing_key: rk)
           :fanout ->
-            :ok = AMQP.Exchange.fanout(channel, ex, durable: true)
+            :ok = AMQP.Exchange.fanout(channel, ex, durable: durable)
             :ok = AMQP.Queue.bind(channel, q, ex)
         end
         if is_consumer == true do
